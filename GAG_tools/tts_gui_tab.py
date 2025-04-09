@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
                              QSpinBox, QDoubleSpinBox, QCheckBox, QTextEdit,
                              QFileDialog, QGroupBox, QMessageBox, QStatusBar, QInputDialog, QGridLayout,
-                             QProgressBar, QFormLayout)
+                             QProgressBar, QFormLayout, QRadioButton, QButtonGroup)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QUrl, QFileSystemWatcher, QTimer
 from GAG_tools.config_manager import ConfigManager
 import resources_rc
@@ -142,12 +142,26 @@ class TTSGUI(QMainWindow):
         self.gpt_switching = False
         self.sovits_switching = False
         self.synthesis_pending = False
-        os.makedirs('GPT_weights_v2', exist_ok=True)
-        os.makedirs('SoVITS_weights_v2', exist_ok=True)
+        
+        # 定义模型版本及对应的目录
+        self.MODEL_VERSIONS = {
+            'v2': {'gpt': 'GPT_weights_v2', 'sovits': 'SoVITS_weights_v2'},
+            'v3': {'gpt': 'GPT_weights_v3', 'sovits': 'SoVITS_weights_v3'}
+        }
+        # 设置当前模型版本，默认为v2或从配置读取
+        self.current_model_version = self.config_manager.get_value('model_version', 'v2')
+        
+        # 创建模型目录，添加到文件监视器
+        for version in self.MODEL_VERSIONS.values():
+            os.makedirs(version['gpt'], exist_ok=True)
+            os.makedirs(version['sovits'], exist_ok=True)
+            
         self.watcher = QFileSystemWatcher(self)
-        self.watcher.addPath('GPT_weights_v2')
-        self.watcher.addPath('SoVITS_weights_v2')
+        for version in self.MODEL_VERSIONS.values():
+            self.watcher.addPath(version['gpt'])
+            self.watcher.addPath(version['sovits'])
         self.watcher.directoryChanged.connect(self.update_model_lists)
+        
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAutoFillBackground(True)
         self.setup_background()
@@ -193,7 +207,7 @@ class TTSGUI(QMainWindow):
             self.tr("在这里输入需要合成的文本..."
                     "\n\n使用方法：\n"
                     "1.将本exe放入GPT-SoVITS官方整合包下，双击启动。\n"
-                    "2.将读取并使用GPT_weights_v2与SoVITS_weights_v2下的模型，请先完成训练获得模型。\n"
+                    "2.将读取并使用GPT_weights与SoVITS_weights下的模型，请先完成训练获得模型。\n"
                     "3.保存预设将保存当前所有合成参数设定，可视为一个说话人，后续可快速切换，亦可用于批量合成页面\n"
                     "4.默认使用整合包自带环境来调起并使用API，也可以在API管理页面自定义。\n"
                     "\n此外，如果你使用官方v2-240821整合包，你可能会遇见粤语等语种合成空白音频的问题，这是GPT-SoVITS的一个已知并已解决的问题，更新整合包代码到仓库最新即可。"
@@ -296,6 +310,30 @@ class TTSGUI(QMainWindow):
 
         preset_group.setLayout(preset_layout)
         top_row.addWidget(preset_group)
+        
+        # 模型版本选择
+        version_group = QGroupBox(self.tr("模型版本"))
+        version_layout = QHBoxLayout()
+        
+        self.version_button_group = QButtonGroup(self)
+        self.v2_radio = QRadioButton("v2")
+        self.v3_radio = QRadioButton("v3")
+        
+        # 根据配置选择当前版本
+        if self.current_model_version == 'v2':
+            self.v2_radio.setChecked(True)
+        else:
+            self.v3_radio.setChecked(True)
+            
+        self.version_button_group.addButton(self.v2_radio, 2)
+        self.version_button_group.addButton(self.v3_radio, 3)
+        self.version_button_group.buttonClicked.connect(self.change_model_version)
+        
+        version_layout.addWidget(self.v2_radio)
+        version_layout.addWidget(self.v3_radio)
+        version_group.setLayout(version_layout)
+        
+        top_row.addWidget(version_group)
 
         # Model Selection
         model_group = QGroupBox(self.tr("模型选择"))
@@ -589,28 +627,50 @@ class TTSGUI(QMainWindow):
         return [f for f in os.listdir(directory) if f.endswith(extension)]
 
     def update_model_lists(self):
-        # Save current selection
+        # 保存当前选择
         current_gpt = self.gpt_combo.currentText()
         current_sovits = self.sovits_combo.currentText()
 
-        # Update model list
+        # 获取当前版本的目录
+        gpt_dir = self.MODEL_VERSIONS[self.current_model_version]['gpt']
+        sovits_dir = self.MODEL_VERSIONS[self.current_model_version]['sovits']
+
+        # 更新模型列表
         self.gpt_combo.clear()
-        gpt_models = self.get_model_files('GPT_weights_v2', '.ckpt')
+        gpt_models = self.get_model_files(gpt_dir, '.ckpt')
         self.gpt_combo.addItems(gpt_models)
 
         self.sovits_combo.clear()
-        sovits_models = self.get_model_files('SoVITS_weights_v2', '.pth')
+        sovits_models = self.get_model_files(sovits_dir, '.pth')
         self.sovits_combo.addItems(sovits_models)
 
-        # Restore previous selection if it still exists
+        # 恢复之前的选择（如果仍然存在）
         if current_gpt in gpt_models:
             self.gpt_combo.setCurrentText(current_gpt)
         if current_sovits in sovits_models:
             self.sovits_combo.setCurrentText(current_sovits)
+        
+        # 更新提示文本信息
+        self.text_input.setPlaceholderText(
+            self.tr("在这里输入需要合成的文本..."
+                    "\n\n使用方法：\n"
+                    "1.将本exe放入GPT-SoVITS官方整合包下，双击启动。\n"
+                    "2.将读取并使用{}_v{}与{}_v{}下的模型，请先完成训练获得模型。\n"
+                    "3.保存预设将保存当前所有合成参数设定，可视为一个说话人，后续可快速切换，亦可用于批量合成页面\n"
+                    "4.默认使用整合包自带环境来调起并使用API，也可以在API管理页面自定义。\n"
+                    "\n此外，如果你使用官方v2-240821整合包，你可能会遇见粤语等语种合成空白音频的问题，这是GPT-SoVITS的一个已知并已解决的问题，更新整合包代码到仓库最新即可。"
+                    "\n\nGitHub开源地址: https://github.com/AliceNavigator/GPT-SoVITS-Api-GUI           by  领航员未鸟\n").format(
+            'GPT_weights', self.current_model_version[1:], 
+            'SoVITS_weights', self.current_model_version[1:])
+        )
 
     def switch_models_and_synthesize(self):
-        gpt_model = os.path.join('GPT_weights_v2', self.gpt_combo.currentText())
-        sovits_model = os.path.join('SoVITS_weights_v2', self.sovits_combo.currentText())
+        # 根据当前选择的版本获取模型路径
+        gpt_dir = self.MODEL_VERSIONS[self.current_model_version]['gpt']
+        sovits_dir = self.MODEL_VERSIONS[self.current_model_version]['sovits']
+        
+        gpt_model = os.path.join(gpt_dir, self.gpt_combo.currentText())
+        sovits_model = os.path.join(sovits_dir, self.sovits_combo.currentText())
 
         self.gpt_switching = False
         self.sovits_switching = False
@@ -647,10 +707,12 @@ class TTSGUI(QMainWindow):
         else:
             self.statusBar.showMessage(message, 5000)
             if "GPT" in message:
-                self.current_gpt_model = os.path.join('GPT_weights_v2', self.gpt_combo.currentText())
+                gpt_dir = self.MODEL_VERSIONS[self.current_model_version]['gpt']
+                self.current_gpt_model = os.path.join(gpt_dir, self.gpt_combo.currentText())
                 self.gpt_switching = False
             elif "SOVITS" in message:
-                self.current_sovits_model = os.path.join('SoVITS_weights_v2', self.sovits_combo.currentText())
+                sovits_dir = self.MODEL_VERSIONS[self.current_model_version]['sovits']
+                self.current_sovits_model = os.path.join(sovits_dir, self.sovits_combo.currentText())
                 self.sovits_switching = False
 
         # If all requested switches are complete and there is a pending synthesis task, execute synthesis
@@ -816,13 +878,25 @@ class TTSGUI(QMainWindow):
         presets = self.config_manager.get_value('presets', {})
         preset_data = presets.get(preset_name, {})
 
+        # 检查是否有保存版本信息，并设置对应的模型版本
+        if 'model_version' in preset_data:
+            self.current_model_version = preset_data['model_version']
+            if self.current_model_version == 'v2':
+                self.v2_radio.setChecked(True)
+            else:
+                self.v3_radio.setChecked(True)
+            # 更新模型列表以反映版本变更
+            self.update_model_lists()
+
         if 'gpt_model' in preset_data and preset_data['gpt_model']:
-            index = self.gpt_combo.findText(os.path.basename(preset_data['gpt_model']))
+            model_file = os.path.basename(preset_data['gpt_model'])
+            index = self.gpt_combo.findText(model_file)
             if index >= 0:
                 self.gpt_combo.setCurrentIndex(index)
 
         if 'sovits_model' in preset_data and preset_data['sovits_model']:
-            index = self.sovits_combo.findText(os.path.basename(preset_data['sovits_model']))
+            model_file = os.path.basename(preset_data['sovits_model'])
+            index = self.sovits_combo.findText(model_file)
             if index >= 0:
                 self.sovits_combo.setCurrentIndex(index)
 
@@ -846,9 +920,14 @@ class TTSGUI(QMainWindow):
     def save_preset(self):
         preset_name, ok = QInputDialog.getText(self, self.tr("保存预设"), self.tr("输入预设名:"))
         if ok and preset_name:
+            # 使用当前版本的目录
+            gpt_dir = self.MODEL_VERSIONS[self.current_model_version]['gpt']
+            sovits_dir = self.MODEL_VERSIONS[self.current_model_version]['sovits']
+            
             preset_data = {
-                'gpt_model': os.path.join('GPT_weights_v2', self.gpt_combo.currentText()),
-                'sovits_model': os.path.join('SoVITS_weights_v2', self.sovits_combo.currentText())
+                'model_version': self.current_model_version,
+                'gpt_model': os.path.join(gpt_dir, self.gpt_combo.currentText()),
+                'sovits_model': os.path.join(sovits_dir, self.sovits_combo.currentText())
             }
 
             for param, widget in self.param_widgets.items():
@@ -978,7 +1057,8 @@ class TTSGUI(QMainWindow):
         updates = {
             'api_url': self.api_url_input.text(),
             'current_preset': self.preset_combo.currentText(),
-            'save_directory': self.save_path_input.text()
+            'save_directory': self.save_path_input.text(),
+            'model_version': self.current_model_version
         }
         self.config_manager.update_config(updates)
 
@@ -996,6 +1076,30 @@ class TTSGUI(QMainWindow):
     def closeEvent(self, event):
         self.cleanup()
         super().closeEvent(event)
+
+    def change_model_version(self, button):
+        """
+        当用户切换模型版本时更新相关状态和模型列表
+        """
+        if button == self.v2_radio:
+            self.current_model_version = 'v2'
+        else:
+            self.current_model_version = 'v3'
+        
+        # 保存当前版本设置到配置
+        self.config_manager.update_config({'model_version': self.current_model_version})
+        
+        # 更新模型列表
+        self.update_model_lists()
+        
+        # 重置当前加载的模型，以便在合成时加载正确版本目录的模型
+        self.current_gpt_model = None
+        self.current_sovits_model = None
+        
+        self.statusBar.showMessage(
+            self.tr("已切换到{}模型目录").format(self.current_model_version), 
+            3000
+        )
 
 
 def main():
